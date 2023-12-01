@@ -18,7 +18,7 @@ def get_network_from_plans(plans_manager: PlansManager,
     trainer rather than inferring it again from the plans here.
     """
     num_stages = len(configuration_manager.conv_kernel_sizes)
-
+    # 通过维度选择卷积块是1d、2d、还是3d
     dim = len(configuration_manager.conv_kernel_sizes[0])
     conv_op = convert_dim_to_conv_op(dim)
 
@@ -29,6 +29,7 @@ def get_network_from_plans(plans_manager: PlansManager,
         'PlainConvUNet': PlainConvUNet,
         'ResidualEncoderUNet': ResidualEncoderUNet
     }
+    # nonlin指的是非线性激活函数
     kwargs = {
         'PlainConvUNet': {
             'conv_bias': True,

@@ -60,7 +60,7 @@ def convert_dataset_name_to_id(dataset_name: str):
     dataset_id = int(dataset_name[7:10])
     return dataset_id
 
-
+# 这个函数的作用是将一个数据集的名称或编号转换为一个标准的数据集名称。
 def maybe_convert_to_dataset_name(dataset_name_or_id: Union[int, str]) -> str:
     if isinstance(dataset_name_or_id, str) and dataset_name_or_id.startswith("Dataset"):
         return dataset_name_or_id

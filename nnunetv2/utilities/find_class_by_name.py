@@ -3,7 +3,7 @@ import pkgutil
 
 from batchgenerators.utilities.file_and_folder_operations import *
 
-
+# 递归在指定的目录下找特定的类
 def recursive_find_python_class(folder: str, class_name: str, current_module: str):
     tr = None
     for importer, modname, ispkg in pkgutil.iter_modules([folder]):

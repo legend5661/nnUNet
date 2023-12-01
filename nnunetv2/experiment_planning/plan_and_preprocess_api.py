@@ -47,7 +47,7 @@ def extract_fingerprints(dataset_ids: List[int], fingerprint_extractor_class_nam
         extract_fingerprint_dataset(d, fingerprint_extractor_class, num_processes, check_dataset_integrity, clean,
                                     verbose)
 
-
+# 找出每一个数据集经验参数的函数
 def plan_experiment_dataset(dataset_id: int,
                             experiment_planner_class: Type[ExperimentPlanner] = ExperimentPlanner,
                             gpu_memory_target_in_gb: float = 8, preprocess_class_name: str = 'DefaultPreprocessor',
@@ -59,6 +59,7 @@ def plan_experiment_dataset(dataset_id: int,
     kwargs = {}
     if overwrite_plans_name is not None:
         kwargs['plans_name'] = overwrite_plans_name
+    # 使用指定的experiment_planner_class的plan_experiment()函数来进行参数设定
     return experiment_planner_class(dataset_id,
                                     gpu_memory_target_in_gb=gpu_memory_target_in_gb,
                                     preprocessor_name=preprocess_class_name,
@@ -76,10 +77,12 @@ def plan_experiments(dataset_ids: List[int], experiment_planner_class_name: str 
     """
     overwrite_target_spacing ONLY applies to 3d_fullres and 3d_cascade fullres!
     """
+    # 在对应的路径下找传入的experiment_planner_class_name的类，一般来说，不改变该类，则必能找到
     experiment_planner = recursive_find_python_class(join(nnunetv2.__path__[0], "experiment_planning"),
                                                      experiment_planner_class_name,
                                                      current_module="nnunetv2.experiment_planning")
     for d in dataset_ids:
+        # 依此调用函数输出数据集的plan
         plan_experiment_dataset(d, experiment_planner, gpu_memory_target_in_gb, preprocess_class_name,
                                 overwrite_target_spacing, overwrite_plans_name)
 

@@ -62,11 +62,14 @@ from torch import distributed as dist
 from torch.cuda import device_count
 from torch.cuda.amp import GradScaler
 from torch.nn.parallel import DistributedDataParallel as DDP
+from nnunetv2.mymodel.mymodel import get_my_network_from_plans
+import segmentation_models_pytorch as smp
+
 
 
 class nnUNetTrainer(object):
     def __init__(self, plans: dict, configuration: str, fold: int, dataset_json: dict, unpack_dataset: bool = True,
-                 device: torch.device = torch.device('cuda')):
+                 device: torch.device = torch.device('cuda'), model : str = 'unet'):
         # From https://grugbrain.dev/. Worth a read ya big brains ;-)
 
         # apex predator of grug is complexity
@@ -88,7 +91,7 @@ class nnUNetTrainer(object):
         self.local_rank = 0 if not self.is_ddp else dist.get_rank()
 
         self.device = device
-
+        self.model = model
         # print what device we are using
         if self.is_ddp:  # implicitly it's clear that we use cuda in this case
             print(f"I am local rank {self.local_rank}. {device_count()} GPUs are available. The world size is "
@@ -201,10 +204,14 @@ class nnUNetTrainer(object):
             self.num_input_channels = determine_num_input_channels(self.plans_manager, self.configuration_manager,
                                                                    self.dataset_json)
 
-            self.network = self.build_network_architecture(self.plans_manager, self.dataset_json,
-                                                           self.configuration_manager,
-                                                           self.num_input_channels,
-                                                           enable_deep_supervision=True).to(self.device)
+            self.network = get_my_network_from_plans(self.plans_manager, self.dataset_json,
+                                                     self.configuration_manager,
+                                                     self.num_input_channels,).to(self.device)
+            if self.model == 'unet':
+                self.network = self.build_network_architecture(self.plans_manager, self.dataset_json,
+                                                            self.configuration_manager,
+                                                            self.num_input_channels,
+                                                            enable_deep_supervision=True).to(self.device)
             # compile network for free speedup
             if self._do_i_compile():
                 self.print_to_log_file('Compiling network...')
@@ -351,18 +358,18 @@ class nnUNetTrainer(object):
             loss = DC_and_CE_loss({'batch_dice': self.configuration_manager.batch_dice,
                                    'smooth': 1e-5, 'do_bg': False, 'ddp': self.is_ddp}, {}, weight_ce=1, weight_dice=1,
                                   ignore_label=self.label_manager.ignore_label, dice_class=MemoryEfficientSoftDiceLoss)
+        if self.model == 'unet':
+            deep_supervision_scales = self._get_deep_supervision_scales()
 
-        deep_supervision_scales = self._get_deep_supervision_scales()
+            # we give each output a weight which decreases exponentially (division by 2) as the resolution decreases
+            # this gives higher resolution outputs more weight in the loss
+            weights = np.array([1 / (2 ** i) for i in range(len(deep_supervision_scales))])
+            weights[-1] = 0
 
-        # we give each output a weight which decreases exponentially (division by 2) as the resolution decreases
-        # this gives higher resolution outputs more weight in the loss
-        weights = np.array([1 / (2 ** i) for i in range(len(deep_supervision_scales))])
-        weights[-1] = 0
-
-        # we don't use the lowest 2 outputs. Normalize weights so that they sum to 1
-        weights = weights / weights.sum()
-        # now wrap the loss
-        loss = DeepSupervisionWrapper(loss, weights)
+            # we don't use the lowest 2 outputs. Normalize weights so that they sum to 1
+            weights = weights / weights.sum()
+            # now wrap the loss
+            loss = DeepSupervisionWrapper(loss, weights)
         return loss
 
     def configure_rotation_dummyDA_mirroring_and_inital_patch_size(self):
@@ -783,10 +790,13 @@ class nnUNetTrainer(object):
         This function is specific for the default architecture in nnU-Net. If you change the architecture, there are
         chances you need to change this as well!
         """
-        if self.is_ddp:
-            self.network.module.decoder.deep_supervision = enabled
-        else:
-            self.network.decoder.deep_supervision = enabled
+        if self.model == 'unet':
+            if self.is_ddp:
+                self.network.module.decoder.deep_supervision = enabled
+            else:
+                self.network.decoder.deep_supervision = enabled
+        pass 
+        
 
     def on_train_start(self):
         if not self.was_initialized:
@@ -882,8 +892,11 @@ class nnUNetTrainer(object):
         with autocast(self.device.type, enabled=True) if self.device.type == 'cuda' else dummy_context():
             output = self.network(data)
             # del data
-            l = self.loss(output, target)
-
+            if self.model == 'unet':
+                l = self.loss(output, target)
+            else:
+                l = self.loss(output, target[0]) # 这里修改了target为target[0]，因为深监督配置会产生7个尺度的target，而不用深监督只需要用一个就行
+            
         if self.grad_scaler is not None:
             self.grad_scaler.scale(l).backward()
             self.grad_scaler.unscale_(self.optimizer)
@@ -928,12 +941,19 @@ class nnUNetTrainer(object):
         with autocast(self.device.type, enabled=True) if self.device.type == 'cuda' else dummy_context():
             output = self.network(data)
             del data
-            l = self.loss(output, target)
-
+            if self.model == 'unet':
+                l = self.loss(output, target)
+            else:
+                l = self.loss(output, target[0])
+            
         # we only need the output with the highest output resolution
-        output = output[0]
-        target = target[0]
-
+        
+        if self.model == 'unet':
+            output = output[0]
+            target = target[0]
+        else:
+            output = output
+            target = target[0]
         # the following is needed for online evaluation. Fake dice (green line)
         axes = [0] + list(range(2, output.ndim))
 

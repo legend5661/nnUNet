@@ -51,16 +51,16 @@ class ExperimentPlanner(object):
         self.UNet_class = PlainConvUNet
         # the following two numbers are really arbitrary and were set to reproduce nnU-Net v1's configurations as
         # much as possible
-        self.UNet_reference_val_3d = 560000000  # 455600128  550000000
-        self.UNet_reference_val_2d = 85000000  # 83252480
-        self.UNet_reference_com_nfeatures = 32
+        self.UNet_reference_val_3d = 560000000  # 455600128  550000000用于3D图像的UNet模型的参考内存占用，单位是字节
+        self.UNet_reference_val_2d = 85000000  # 83252480用于2D图像的UNet模型的参考内存占用，单位是字节
+        self.UNet_reference_com_nfeatures = 32 # UNet模型的参考特征图数量
         self.UNet_reference_val_corresp_GB = 8
-        self.UNet_reference_val_corresp_bs_2d = 12
+        self.UNet_reference_val_corresp_bs_2d = 12  # 2D图像的参考批次大小
         self.UNet_reference_val_corresp_bs_3d = 2
         self.UNet_vram_target_GB = gpu_memory_target_in_gb
-        self.UNet_featuremap_min_edge_length = 4
-        self.UNet_blocks_per_stage_encoder = (2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2)
-        self.UNet_blocks_per_stage_decoder = (2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2)
+        self.UNet_featuremap_min_edge_length = 4 # UNet模型的最小特征图边长，单位是像素。这个值决定了UNet模型的最大深度
+        self.UNet_blocks_per_stage_encoder = (2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2) # UNet模型的编码器部分每个阶段的卷积块数量。这个值是一个元组，长度等于UNet模型的深度
+        self.UNet_blocks_per_stage_decoder = (2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2) # UNet模型的解码器部分每个阶段的卷积块数量。这个值是一个元组，长度等于UNet模型的深度
         self.UNet_min_batch_size = 2
         self.UNet_max_features_2d = 512
         self.UNet_max_features_3d = 320
@@ -152,7 +152,8 @@ class ExperimentPlanner(object):
             "force_separate_z": None,
         }
         return resampling_fn, resampling_fn_kwargs
-
+    
+    # 决定resample后的分辨率的函数
     def determine_fullres_target_spacing(self) -> np.ndarray:
         """
         per default we use the 50th percentile=median for the target spacing. Higher spacing results in smaller data
@@ -213,6 +214,7 @@ class ExperimentPlanner(object):
         normalization_schemes = [i.__name__ for i in normalization_schemes]
         return normalization_schemes, use_nonzero_mask_for_norm
 
+    # 决定转置的函数
     def determine_transpose(self):
         if self.suppress_transpose:
             return [0, 1, 2], [0, 1, 2]
@@ -222,6 +224,7 @@ class ExperimentPlanner(object):
 
         max_spacing_axis = np.argmax(target_spacing)
         remaining_axes = [i for i in list(range(3)) if i != max_spacing_axis]
+        # 最大间距的那一维放最前面
         transpose_forward = [max_spacing_axis] + remaining_axes
         transpose_backward = [np.argwhere(np.array(transpose_forward) == i)[0][0] for i in range(3)]
         return transpose_forward, transpose_backward
@@ -388,8 +391,12 @@ class ExperimentPlanner(object):
         fullres_spacing_transposed = fullres_spacing[transpose_forward]
 
         # get transposed new median shape (what we would have after resampling)
+        # compute_new_shape这个函数的作用是根据上面计算出的目标间距（即fullres_spacing）和
+        # 原始间距（即i）以及crop后的形状（即j），计算图像在目标间距下的形状
+        # 这个函数在nnunetv2/preprocessing/resampling/default_resampling.py中
         new_shapes = [compute_new_shape(j, i, fullres_spacing) for i, j in
                       zip(self.dataset_fingerprint['spacings'], self.dataset_fingerprint['shapes_after_crop'])]
+        # 找出中位数的新形状
         new_median_shape = np.median(new_shapes, 0)
         new_median_shape_transposed = new_median_shape[transpose_forward]
 
