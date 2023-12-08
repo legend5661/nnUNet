@@ -147,7 +147,7 @@ class nnUNetTrainer(object):
         self.oversample_foreground_percent = 0.33
         self.num_iterations_per_epoch = 250
         self.num_val_iterations_per_epoch = 50
-        self.num_epochs = 1000
+        self.num_epochs = 5
         self.current_epoch = 0
 
         ### Dealing with labels/regions
@@ -203,15 +203,18 @@ class nnUNetTrainer(object):
         if not self.was_initialized:
             self.num_input_channels = determine_num_input_channels(self.plans_manager, self.configuration_manager,
                                                                    self.dataset_json)
-
-            self.network = get_my_network_from_plans(self.plans_manager, self.dataset_json,
-                                                     self.configuration_manager,
-                                                     self.num_input_channels,).to(self.device)
+            
             if self.model == 'unet':
                 self.network = self.build_network_architecture(self.plans_manager, self.dataset_json,
                                                             self.configuration_manager,
                                                             self.num_input_channels,
                                                             enable_deep_supervision=True).to(self.device)
+            else:
+                self.network = get_my_network_from_plans(self.plans_manager, self.dataset_json,
+                                                     self.configuration_manager,
+                                                     self.num_input_channels,
+                                                     model = self.model).to(self.device)
+            
             # compile network for free speedup
             if self._do_i_compile():
                 self.print_to_log_file('Compiling network...')
@@ -296,9 +299,10 @@ class nnUNetTrainer(object):
                                       num_input_channels, deep_supervision=enable_deep_supervision)
 
     def _get_deep_supervision_scales(self):
-        deep_supervision_scales = list(list(i) for i in 1 / np.cumprod(np.vstack(
-            self.configuration_manager.pool_op_kernel_sizes), axis=0))[:-1]
-        return deep_supervision_scales
+        # deep_supervision_scales = list(list(i) for i in 1 / np.cumprod(np.vstack(
+        #     self.configuration_manager.pool_op_kernel_sizes), axis=0))[:-1]
+        # return deep_supervision_scales
+        pass
 
     def _set_batch_size_and_oversample(self):
         if not self.is_ddp:
@@ -358,18 +362,18 @@ class nnUNetTrainer(object):
             loss = DC_and_CE_loss({'batch_dice': self.configuration_manager.batch_dice,
                                    'smooth': 1e-5, 'do_bg': False, 'ddp': self.is_ddp}, {}, weight_ce=1, weight_dice=1,
                                   ignore_label=self.label_manager.ignore_label, dice_class=MemoryEfficientSoftDiceLoss)
-        if self.model == 'unet':
-            deep_supervision_scales = self._get_deep_supervision_scales()
+        # if self.model == 'unet':
+        #     deep_supervision_scales = self._get_deep_supervision_scales()
 
-            # we give each output a weight which decreases exponentially (division by 2) as the resolution decreases
-            # this gives higher resolution outputs more weight in the loss
-            weights = np.array([1 / (2 ** i) for i in range(len(deep_supervision_scales))])
-            weights[-1] = 0
+        #     # we give each output a weight which decreases exponentially (division by 2) as the resolution decreases
+        #     # this gives higher resolution outputs more weight in the loss
+        #     weights = np.array([1 / (2 ** i) for i in range(len(deep_supervision_scales))])
+        #     weights[-1] = 0
 
-            # we don't use the lowest 2 outputs. Normalize weights so that they sum to 1
-            weights = weights / weights.sum()
-            # now wrap the loss
-            loss = DeepSupervisionWrapper(loss, weights)
+        #     # we don't use the lowest 2 outputs. Normalize weights so that they sum to 1
+        #     weights = weights / weights.sum()
+        #     # now wrap the loss
+        #     loss = DeepSupervisionWrapper(loss, weights)
         return loss
 
     def configure_rotation_dummyDA_mirroring_and_inital_patch_size(self):
@@ -591,6 +595,7 @@ class nnUNetTrainer(object):
     def get_dataloaders(self):
         # we use the patch size to determine whether we need 2D or 3D dataloaders. We also use it to determine whether
         # we need to use dummy 2D augmentation (in case of 3D training) and what our initial patch size should be
+        # 获取patch_size
         patch_size = self.configuration_manager.patch_size
         dim = len(patch_size)
 
@@ -790,14 +795,14 @@ class nnUNetTrainer(object):
         This function is specific for the default architecture in nnU-Net. If you change the architecture, there are
         chances you need to change this as well!
         """
-        if self.model == 'unet':
-            if self.is_ddp:
-                self.network.module.decoder.deep_supervision = enabled
-            else:
-                self.network.decoder.deep_supervision = enabled
+        # if self.model == 'unet':
+        #     if self.is_ddp:
+        #         self.network.module.decoder.deep_supervision = enabled
+        #     else:
+        #         self.network.decoder.deep_supervision = enabled
         pass 
         
-
+    # 训练开始时的函数
     def on_train_start(self):
         if not self.was_initialized:
             self.initialize()
@@ -805,8 +810,9 @@ class nnUNetTrainer(object):
         maybe_mkdir_p(self.output_folder)
 
         # make sure deep supervision is on in the network
+        # 设置深监督
         self.set_deep_supervision_enabled(True)
-
+        # 打印plans
         self.print_plans()
         empty_cache(self.device)
 
@@ -840,6 +846,7 @@ class nnUNetTrainer(object):
         # print(f"batch size: {self.batch_size}")
         # print(f"oversample: {self.oversample_foreground_percent}")
 
+    # 训练结束时的函数
     def on_train_end(self):
         # dirty hack because on_epoch_end increments the epoch counter and this is executed afterwards.
         # This will lead to the wrong current epoch to be stored
@@ -864,8 +871,11 @@ class nnUNetTrainer(object):
         empty_cache(self.device)
         self.print_to_log_file("Training done.")
 
+    # 训练中的每个epoch开始时的哈数
     def on_train_epoch_start(self):
+        # 设置网络为训练模式
         self.network.train()
+        # 学习率scheduler往前进一步
         self.lr_scheduler.step(self.current_epoch)
         self.print_to_log_file('')
         self.print_to_log_file(f'Epoch {self.current_epoch}')
@@ -874,7 +884,9 @@ class nnUNetTrainer(object):
         # lrs are the same for all workers so we don't need to gather them in case of DDP training
         self.logger.log('lrs', self.optimizer.param_groups[0]['lr'], self.current_epoch)
 
+    # 训练步骤（重要）
     def train_step(self, batch: dict) -> dict:
+        # 取出数据和target
         data = batch['data']
         target = batch['target']
 
@@ -884,6 +896,7 @@ class nnUNetTrainer(object):
         else:
             target = target.to(self.device, non_blocking=True)
 
+        # 将之前的所有的参数的梯度清零
         self.optimizer.zero_grad(set_to_none=True)
         # Autocast is a little bitch.
         # If the device_type is 'cpu' then it's slow as heck and needs to be disabled.
@@ -892,10 +905,12 @@ class nnUNetTrainer(object):
         with autocast(self.device.type, enabled=True) if self.device.type == 'cuda' else dummy_context():
             output = self.network(data)
             # del data
+            # 在nnunet中，深监督的配置会产生7个尺度的target，每个target都是一个单通道的分割掩码，对应于不同分辨率的输出
             if self.model == 'unet':
                 l = self.loss(output, target)
             else:
-                l = self.loss(output, target[0]) # 这里修改了target为target[0]，因为深监督配置会产生7个尺度的target，而不用深监督只需要用一个就行
+                # 这里修改了target为target[0]，因为深监督配置会产生7个尺度的target，而不用深监督只需要用一个就行
+                l = self.loss(output, target[0]) 
             
         if self.grad_scaler is not None:
             self.grad_scaler.scale(l).backward()
@@ -923,7 +938,7 @@ class nnUNetTrainer(object):
 
     def on_validation_epoch_start(self):
         self.network.eval()
-
+    # 验证的步骤，重要
     def validation_step(self, batch: dict) -> dict:
         data = batch['data']
         target = batch['target']
@@ -1035,6 +1050,7 @@ class nnUNetTrainer(object):
         self.logger.log('epoch_end_timestamps', time(), self.current_epoch)
 
         # todo find a solution for this stupid shit
+        # [-1]是指最后一行，也即最新的一行
         self.print_to_log_file('train_loss', np.round(self.logger.my_fantastic_logging['train_losses'][-1], decimals=4))
         self.print_to_log_file('val_loss', np.round(self.logger.my_fantastic_logging['val_losses'][-1], decimals=4))
         self.print_to_log_file('Pseudo dice', [np.round(i, decimals=4) for i in

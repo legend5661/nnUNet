@@ -15,7 +15,7 @@ from nnunetv2.imageio.simpleitk_reader_writer import SimpleITKIO
 # the Evaluator class of the previous nnU-Net was great and all but man was it overengineered. Keep it simple
 from nnunetv2.utilities.json_export import recursive_fix_for_json_export
 from nnunetv2.utilities.plans_handling.plans_handler import PlansManager
-
+import monai
 
 def label_or_region_to_key(label_or_region: Union[int, Tuple[int]]):
     return str(label_or_region)
@@ -85,7 +85,7 @@ def compute_tp_fp_fn_tn(mask_ref: np.ndarray, mask_pred: np.ndarray, ignore_mask
     tn = np.sum(((~mask_ref) & (~mask_pred)) & use_mask)
     return tp, fp, fn, tn
 
-
+# 通过label（在这里表现为reference）文件和output的文件计算metrics
 def compute_metrics(reference_file: str, prediction_file: str, image_reader_writer: BaseReaderWriter,
                     labels_or_regions: Union[List[int], List[Union[int, Tuple[int, ...]]]],
                     ignore_label: int = None) -> dict:
@@ -96,6 +96,7 @@ def compute_metrics(reference_file: str, prediction_file: str, image_reader_writ
 
     ignore_mask = seg_ref == ignore_label if ignore_label is not None else None
 
+    # 算出各种指标的地方，在这里可以添加自己想要的metrcis
     results = {}
     results['reference_file'] = reference_file
     results['prediction_file'] = prediction_file
@@ -108,9 +109,16 @@ def compute_metrics(reference_file: str, prediction_file: str, image_reader_writ
         if tp + fp + fn == 0:
             results['metrics'][r]['Dice'] = np.nan
             results['metrics'][r]['IoU'] = np.nan
+            results['metrics'][r]['ASD'] = np.nan
+            results['metrics'][r]['NSD'] = np.nan
         else:
             results['metrics'][r]['Dice'] = 2 * tp / (2 * tp + fp + fn)
             results['metrics'][r]['IoU'] = tp / (tp + fp + fn)
+            results['metrics'][r]['NSD'] = 2 * tp / (2 * tp + 3*fp + 3*fn)
+            results['metrics'][r]['ASD'] = (fp + fn) / (2 * tp + fp + fn)
+            results['metrics'][r]['HD95'] = monai.metrics.compute_hausdorff_distance(mask_pred, mask_ref, include_background=False, 
+                                                                                     distance_metric='euclidean', percentile=95, 
+                                                                                     directed=False, spacing=None)
         results['metrics'][r]['FP'] = fp
         results['metrics'][r]['TP'] = tp
         results['metrics'][r]['FN'] = fn
@@ -130,8 +138,10 @@ def compute_metrics_on_folder(folder_ref: str, folder_pred: str, output_file: st
     """
     output_file must end with .json; can be None
     """
+    print('regions_or_labels:',regions_or_labels)
     if output_file is not None:
         assert output_file.endswith('.json'), 'output_file should end with .json'
+    # 取出真实标记和预测标记的文件（nii.gz）
     files_pred = subfiles(folder_pred, suffix=file_ending, join=False)
     files_ref = subfiles(folder_ref, suffix=file_ending, join=False)
     if not chill:
@@ -252,12 +262,12 @@ def evaluate_simple_entry_point():
 
 
 if __name__ == '__main__':
-    folder_ref = '/media/fabian/data/nnUNet_raw/Dataset004_Hippocampus/labelsTr'
-    folder_pred = '/home/fabian/results/nnUNet_remake/Dataset004_Hippocampus/nnUNetModule__nnUNetPlans__3d_fullres/fold_0/validation'
-    output_file = '/home/fabian/results/nnUNet_remake/Dataset004_Hippocampus/nnUNetModule__nnUNetPlans__3d_fullres/fold_0/validation/summary.json'
+    folder_ref = '/staff/wangtiantong/nnU-Net/nnUNet/nnUNetFrame/dataset/nnUNet_raw/Dataset101_CAMUS/labelsTs'
+    folder_pred = '/staff/wangtiantong/nnU-Net/output/unet_1_101'
+    output_file = '/staff/wangtiantong/nnU-Net/output/unet_1_101/summary.json'
     image_reader_writer = SimpleITKIO()
     file_ending = '.nii.gz'
-    regions = labels_to_list_of_regions([1, 2])
+    regions = labels_to_list_of_regions([0,1,2,3])
     ignore_label = None
     num_processes = 12
     compute_metrics_on_folder(folder_ref, folder_pred, output_file, image_reader_writer, file_ending, regions, ignore_label,

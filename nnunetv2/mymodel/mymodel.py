@@ -10,11 +10,17 @@ from torch import nn
 def get_my_network_from_plans(plans_manager: PlansManager,
                            dataset_json: dict,
                            configuration_manager: ConfigurationManager,
-                           num_input_channels: int,):
+                           num_input_channels: int,
+                           model: str):
     label_manager = plans_manager.get_label_manager(dataset_json)
-    model = smp.UnetPlusPlus(encoder_name='resnet34',
-                             encoder_depth=5, encoder_weights='imagenet', 
-                             decoder_use_batchnorm=True, decoder_channels=(256, 128, 64, 32, 16), 
-                             decoder_attention_type=None, in_channels=num_input_channels, classes=label_manager.num_segmentation_heads,
-                             )
+    if(model == 'unet++'):
+        model = smp.UnetPlusPlus(encoder_name='resnet34',
+                                encoder_depth=5, encoder_weights='imagenet', 
+                                decoder_use_batchnorm=True, decoder_channels=(256, 128, 64, 32, 16), 
+                                decoder_attention_type=None, in_channels=num_input_channels, classes=label_manager.num_segmentation_heads,
+                                )
+    elif(model == 'manet'):
+        model = smp.MAnet(encoder_name='resnet34', encoder_depth=5, encoder_weights='imagenet', 
+                          decoder_use_batchnorm=True, decoder_channels=(256, 128, 64, 32, 16), 
+                          decoder_pab_channels=64, in_channels=num_input_channels, classes=label_manager.num_segmentation_heads)
     return model
